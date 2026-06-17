@@ -1,0 +1,44 @@
+name: Daily job mailer
+
+on:
+  schedule:
+    # 1:00 PM Asia/Kolkata is 7:30 AM UTC.
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Send daily digest
+        run: npm start
+        env:
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
+          MAX_RESULTS: ${{ vars.MAX_RESULTS }}
+          FRESH_HOURS: ${{ vars.FRESH_HOURS }}
+          INCLUDE_UNKNOWN_DATES: ${{ vars.INCLUDE_UNKNOWN_DATES }}
+          DRY_RUN: ${{ vars.DRY_RUN }}
