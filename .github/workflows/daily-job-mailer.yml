@@ -2,9 +2,14 @@ name: Daily job mailer
 
 on:
   schedule:
-    # 1:00 PM Asia/Kolkata is 7:30 AM UTC.
+    # 1:00 PM Asia/Kolkata is 7:30 AM UTC. GitHub may start scheduled runs a few minutes late.
     - cron: "30 7 * * *"
   workflow_dispatch:
+
+# Never run two digests at the same time (e.g. manual run + schedule).
+concurrency:
+  group: daily-job-mailer
+  cancel-in-progress: false
 
 jobs:
   send-digest:
@@ -13,16 +18,25 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --omit=dev
+
+      # Remembers jobs that were already emailed, so every digest only contains new posts.
+      # A new cache entry is saved after each successful run; the newest one is restored.
+      - name: Restore seen jobs
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: seen-jobs-${{ github.run_id }}
+          restore-keys: seen-jobs-
 
       - name: Send daily digest
         run: npm start
@@ -38,6 +52,10 @@ jobs:
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
           JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
+          SEARCH_KEYWORDS: ${{ vars.SEARCH_KEYWORDS }}
+          SEARCH_LOCATIONS: ${{ vars.SEARCH_LOCATIONS }}
+          EXCLUDE_KEYWORDS: ${{ vars.EXCLUDE_KEYWORDS }}
+          SERPAPI_KEYWORDS: ${{ vars.SERPAPI_KEYWORDS }}
           MAX_RESULTS: ${{ vars.MAX_RESULTS }}
           FRESH_HOURS: ${{ vars.FRESH_HOURS }}
           INCLUDE_UNKNOWN_DATES: ${{ vars.INCLUDE_UNKNOWN_DATES }}

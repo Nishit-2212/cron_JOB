@@ -1,17 +1,18 @@
 {
   "name": "daily-job-mailer",
-  "version": "1.0.0",
-  "description": "Daily job search digest for Java, backend, Spring Boot, software engineer, and Node.js roles.",
+  "version": "2.0.0",
+  "description": "Daily email digest of fresh Java / backend / Node.js / fresher software jobs in Ahmedabad, Gandhinagar and Remote India.",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "dry-run": "node src/index.js --dry-run"
   },
   "dependencies": {
-    "nodemailer": "^9.0.1"
+    "nodemailer": "^9.1.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
   },
   "license": "MIT"
 }
