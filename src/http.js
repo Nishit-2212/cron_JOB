@@ -2,8 +2,10 @@ const USER_AGENT = "daily-job-mailer/2.0 (+https://github.com/Nishit-2212/cron_J
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export const fetchText = (url, options = {}) => fetchJson(url, { ...options, as: "text" });
+
 // fetch() with a timeout and retries for network errors, 429 and 5xx responses.
-export async function fetchJson(url, { retries = 2, timeoutMs = 20_000, ...options } = {}) {
+export async function fetchJson(url, { retries = 2, timeoutMs = 20_000, as = "json", ...options } = {}) {
   const host = new URL(url).hostname;
 
   for (let attempt = 0; ; attempt++) {
@@ -11,7 +13,7 @@ export async function fetchJson(url, { retries = 2, timeoutMs = 20_000, ...optio
     try {
       response = await fetch(url, {
         ...options,
-        headers: { "User-Agent": USER_AGENT, Accept: "application/json", ...options.headers },
+        headers: { "User-Agent": USER_AGENT, Accept: as === "json" ? "application/json" : "*/*", ...options.headers },
         signal: AbortSignal.timeout(timeoutMs)
       });
     } catch (error) {
@@ -24,7 +26,7 @@ export async function fetchJson(url, { retries = 2, timeoutMs = 20_000, ...optio
     }
 
     if (response.ok) {
-      return response.json();
+      return as === "json" ? response.json() : response.text();
     }
 
     await response.body?.cancel();

@@ -61,10 +61,49 @@ export function isOpenToCountry(regions, country) {
   return list.some((region) => region.includes(wanted) || OPEN_REGIONS.some((open) => region.includes(open)));
 }
 
-// Returns the configured city a job location mentions, e.g. "Ahmedabad, Gujarat" -> Ahmedabad.
+// Returns the configured city a job location mentions, e.g. "Ahmadabad, Gujarat" -> Ahmedabad.
 export function findCity(location, cities) {
-  const text = normalizeText(location);
-  return cities.find((city) => text.includes(normalizeText(city.place)));
+  const text = ` ${normalizeText(location)} `;
+  return cities.find((city) => city.aliases.some((alias) => text.includes(` ${normalizeText(alias)} `)));
+}
+
+// Words in a title that mean the role is above fresher / junior level.
+const SENIOR_TITLE_WORDS = ["senior", "sr", "staff", "principal", "lead", "manager", "architect", "director", "head", "vp", "chief", "founding", "ii", "iii", "iv"];
+const SENIOR_LEVELS = /senior|manager|director|executive|principal|staff|lead/i;
+
+const YEARS = String.raw`(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|–|to)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)`;
+const EXPERIENCE_PATTERNS = [
+  new RegExp(String.raw`${YEARS}[^.\n]{0,40}?\b(?:experience|exp)\b`, "i"), // "3+ years of Java experience"
+  new RegExp(String.raw`\bexperience\b[^.\n\d]{0,25}${YEARS}`, "i") // "Experience: 2-4 years"
+];
+
+// Minimum years of experience a posting asks for (first mention wins), or null if it doesn't say.
+export function requiredYears(text) {
+  const hits = EXPERIENCE_PATTERNS
+    .map((pattern) => pattern.exec(text ?? ""))
+    .filter(Boolean)
+    .sort((a, b) => a.index - b.index);
+  return hits.length ? Number.parseInt(hits[0][1], 10) : null;
+}
+
+/**
+ * Keeps jobs a fresher/junior can apply to: no senior words in the title, no senior level
+ * from the job board, and no more than `maxYears` of required experience. null disables it.
+ */
+export function createSeniorityFilter(maxYears) {
+  if (maxYears === null) {
+    return () => true;
+  }
+  return (job) => {
+    const words = tokens(job.title);
+    if (SENIOR_TITLE_WORDS.some((word) => words.has(word))) {
+      return false;
+    }
+    if ((job.levels || []).some((level) => SENIOR_LEVELS.test(level))) {
+      return false;
+    }
+    return job.experienceYears === null || job.experienceYears <= maxYears;
+  };
 }
 
 export function parseDate(value) {
@@ -103,23 +142,39 @@ export function parseRelativeDate(value) {
   return new Date(Date.now() - amount * UNIT_MS[match[2]]);
 }
 
-const ENTITIES = { "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&#039;": "'" };
+const ENTITIES = { "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'", "&ndash;": "–", "&mdash;": "—", "&rsquo;": "'", "&lsquo;": "'", "&hellip;": "…" };
 
-export function stripHtml(value, maxLength = 240) {
+function decodeEntity(entity, code) {
+  if (code.startsWith("#")) {
+    const point = code[1].toLowerCase() === "x" ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10);
+    return Number.isNaN(point) ? " " : String.fromCodePoint(point);
+  }
+  return ENTITIES[entity.toLowerCase()] ?? " ";
+}
+
+export function stripHtml(value, maxLength = Infinity) {
   const text = String(value ?? "")
     .replace(/<[^>]*>/g, " ")
-    .replace(/&[#a-z0-9]+;/gi, (entity) => ENTITIES[entity.toLowerCase()] ?? " ")
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, decodeEntity)
     .replace(/\s+/g, " ")
     .trim();
+  return truncate(text, maxLength);
+}
+
+export function truncate(text, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
 }
+
+const PERIODS = { annual: "year", annually: "year", yearly: "year", monthly: "month", weekly: "week", daily: "day", hourly: "hour" };
 
 export function formatSalary(min, max, currency = "", period = "") {
   if (!min && !max) {
     return "";
   }
-  const format = (amount) => Math.round(amount).toLocaleString("en-IN");
-  const symbol = currency === "INR" ? "₹" : currency ? `${currency} ` : "";
-  const range = min && max && min !== max ? `${symbol}${format(min)} – ${symbol}${format(max)}` : `${symbol}${format(min || max)}`;
-  return period ? `${range} / ${period}` : range;
+  const inr = !currency || currency === "INR";
+  const format = (amount) => Math.round(amount).toLocaleString(inr ? "en-IN" : "en-US");
+  const prefix = inr ? "₹" : `${currency} `;
+  const range = min && max && min !== max ? `${prefix}${format(min)} – ${format(max)}` : `${prefix}${format(min || max)}`;
+  const unit = PERIODS[String(period).toLowerCase()] ?? period;
+  return unit ? `${range} / ${unit}` : range;
 }

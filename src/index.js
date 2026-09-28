@@ -1,7 +1,7 @@
-import { cities, config, validateEmailConfig } from "./config.js";
+import { cities, config, drivesTarget, validateEmailConfig } from "./config.js";
 import { sendDigest } from "./email.js";
 import { sleep } from "./http.js";
-import { createTitleMatcher, findCity } from "./matching.js";
+import { createSeniorityFilter, createTitleMatcher, findCity, requiredYears } from "./matching.js";
 import { getProviders, hasCityProvider } from "./providers.js";
 import { jobKeys, loadSeenStore } from "./seen-store.js";
 
@@ -17,12 +17,16 @@ async function main() {
   const found = results.flatMap((result) => result.jobs);
 
   const isRelevant = createTitleMatcher(config.keywords, config.excludeKeywords);
+  const isJuniorFriendly = createSeniorityFilter(config.maxExperienceYears);
   const cutoff = Date.now() - config.freshHours * 3_600_000;
   const inRun = new Set();
+  let tooSenior = 0;
 
   const jobs = found
-    .map((job) => ({ ...job, bucket: pickBucket(job) }))
-    .filter((job) => job.bucket && job.title && isRelevant(job.title))
+    .map((job) => ({ ...job, bucket: pickBucket(job), experienceYears: requiredYears(job.description) }))
+    .filter((job) => job.bucket && job.title)
+    // Curated fresher feeds are already filtered to IT/software roles by the site itself.
+    .filter((job) => job.curated || isRelevant(job.title))
     .filter((job) => (job.postedAt ? job.postedAt.getTime() >= cutoff : config.includeUnknownDates))
     .sort((a, b) => (b.postedAt?.getTime() ?? 0) - (a.postedAt?.getTime() ?? 0))
     .filter((job) => {
@@ -33,25 +37,54 @@ async function main() {
       keys.forEach((key) => inRun.add(key));
       return true;
     })
+    .filter((job) => {
+      // Fresher-drive posts are junior by nature, but the site's tags are loose, so still check the years asked for.
+      const keep = job.curated
+        ? isJuniorFriendly({ title: "", experienceYears: job.experienceYears })
+        : isJuniorFriendly(job);
+      if (!keep) {
+        tooSenior += 1;
+      }
+      return keep;
+    })
     .slice(0, config.maxResults);
 
-  const groups = config.locations
-    .map(({ label }) => ({ label, jobs: jobs.filter((job) => job.bucket === label) }))
-    .filter((group) => group.jobs.length);
+  const missingCitySource = cities.length > 0 && !hasCityProvider();
+  const targets = [...config.locations, ...(drivesTarget ? [drivesTarget] : [])];
+  const groups = targets.map((target) => {
+    const groupJobs = jobs.filter((job) => job.bucket === target.label);
+    const notSearched = missingCitySource && !target.remote && !target.drives;
+    return {
+      label: target.label,
+      jobs: groupJobs,
+      note: groupJobs.length ? "" : notSearched ? "Not searched – needs a free Adzuna or Jooble API key (see the warning at the top)." : "Nothing new since the last email."
+    };
+  });
 
-  const notices = results.filter((result) => result.error).map((result) => result.error);
-  if (cities.length && !hasCityProvider()) {
-    notices.push(`No city job source is configured, so ${cities.map((city) => city.label).join("/")} jobs can't be found. Add ADZUNA_APP_ID + ADZUNA_APP_KEY and/or JOOBLE_API_KEY (both free).`);
+  const notices = [];
+  if (missingCitySource) {
+    notices.push(`${cities.map((city) => city.label).join(" and ")} are NOT being searched: no free job API that works without a key covers Indian cities. Add ADZUNA_APP_ID + ADZUNA_APP_KEY (https://developer.adzuna.com/signup) and/or JOOBLE_API_KEY (https://jooble.org/api/about) as GitHub secrets.`);
   }
+  notices.push(...results.filter((result) => result.error).map((result) => result.error));
 
-  await sendDigest({ jobs, groups, notices });
+  const stats = {
+    fetched: found.length,
+    tooSenior,
+    sources: providers.map((provider) => provider.name)
+  };
+
+  if (jobs.length || config.sendEmptyDigest || config.dryRun) {
+    await sendDigest({ jobs, groups, notices, stats });
+    console.log(`${config.dryRun ? "Dry run" : `Emailed ${config.email.to}`}: ${jobs.length} new jobs (${found.length} fetched, ${tooSenior} too senior).`);
+  } else {
+    console.log(`No new jobs (${found.length} fetched, ${tooSenior} too senior) - no email sent.`);
+  }
 
   if (!config.dryRun) {
     jobs.forEach((job) => seen.add(job));
     await seen.save();
   }
 
-  console.log(`${config.dryRun ? "Dry run" : `Emailed ${config.email.to}`}: ${jobs.length} new jobs (${found.length} fetched).`);
   notices.forEach((notice) => console.warn(`Warning: ${notice}`));
 
   if (results.length && results.every((result) => result.allFailed)) {
@@ -91,12 +124,16 @@ async function runProvider(provider) {
   return { jobs, error, allFailed: total > 0 && failed + skipped === total };
 }
 
-// Decide which configured location a job belongs to, or null to drop it.
+// Decide which section a job belongs to, or null to drop it.
 function pickBucket(job) {
+  if (job.target.drives) {
+    // A fresher drive in Ahmedabad/Gandhinagar goes to that city's section.
+    return findCity(`${job.title} ${job.location}`, cities)?.label ?? job.target.label;
+  }
   if (job.target.remote) {
     return job.remoteEligible ? job.target.label : null;
   }
-  return findCity(job.location, cities)?.label ?? null;
+  return findCity(`${job.location} ${job.region ?? ""}`, cities)?.label ?? null;
 }
 
 main().catch((error) => {

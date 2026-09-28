@@ -2,8 +2,9 @@ name: Daily job mailer
 
 on:
   schedule:
-    # 1:00 PM Asia/Kolkata is 7:30 AM UTC. GitHub may start scheduled runs a few minutes late.
-    - cron: "30 7 * * *"
+    # Once a day at 12:30 PM IST (= 07:00 UTC; cron times are always UTC).
+    # GitHub often starts scheduled runs late when its runners are busy.
+    - cron: "0 7 * * *"
   workflow_dispatch:
 
 # Never run two digests at the same time (e.g. manual run + schedule).
@@ -56,6 +57,9 @@ jobs:
           SEARCH_LOCATIONS: ${{ vars.SEARCH_LOCATIONS }}
           EXCLUDE_KEYWORDS: ${{ vars.EXCLUDE_KEYWORDS }}
           SERPAPI_KEYWORDS: ${{ vars.SERPAPI_KEYWORDS }}
+          MAX_EXPERIENCE_YEARS: ${{ vars.MAX_EXPERIENCE_YEARS }}
+          OFFCAMPUS_JOBS: ${{ vars.OFFCAMPUS_JOBS }}
+          SEND_EMPTY_DIGEST: ${{ vars.SEND_EMPTY_DIGEST }}
           MAX_RESULTS: ${{ vars.MAX_RESULTS }}
           FRESH_HOURS: ${{ vars.FRESH_HOURS }}
           INCLUDE_UNKNOWN_DATES: ${{ vars.INCLUDE_UNKNOWN_DATES }}
