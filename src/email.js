@@ -63,15 +63,20 @@ function footer({ stats }) {
   const hidden = config.maxExperienceYears === null
     ? ""
     : ` Hid ${stats.tooSenior} senior role${stats.tooSenior === 1 ? "" : "s"} (more than ${config.maxExperienceYears} yrs or senior titles).`;
-  return `Scanned ${stats.fetched} postings from ${stats.sources.join(", ")}.${hidden}`;
+  // Per-source counts show at a glance which source is (not) delivering.
+  const sources = stats.sources.map(({ name, fetched, summary }) => `${name} ${fetched}${summary ? ` (${summary})` : ""}`);
+  return `Scanned ${stats.fetched} postings: ${sources.join(", ")}.${hidden}`;
 }
 
 function renderText(digest) {
-  const { groups, notices } = digest;
+  const { groups, notices, info } = digest;
   const lines = [];
 
   if (notices.length) {
     lines.push("⚠ ACTION NEEDED", ...notices.map((notice) => `- ${notice}`), "");
+  }
+  if (info.length) {
+    lines.push(...info.map((note) => `Note: ${note}`), "");
   }
 
   let index = 0;
@@ -97,12 +102,19 @@ function renderText(digest) {
 }
 
 function renderHtml(digest) {
-  const { jobs, groups, notices } = digest;
+  const { jobs, groups, notices, info } = digest;
 
   const noticesHtml = notices.length
     ? `<div style="margin:16px 0;padding:12px 14px;background:#fee2e2;border-left:4px solid #dc2626;border-radius:6px;font-size:14px;color:#7f1d1d;">
         <strong>⚠ Action needed</strong>
         <ul style="margin:6px 0 0;padding-left:18px;">${notices.map((notice) => `<li style="margin-bottom:4px;">${linkify(escapeHtml(notice))}</li>`).join("")}</ul>
+      </div>`
+    : "";
+
+  // Things worth knowing that need no action, e.g. Google Jobs paused until the SerpApi quota renews.
+  const infoHtml = info.length
+    ? `<div style="margin:16px 0;padding:10px 14px;background:#f3f4f6;border-left:4px solid #9ca3af;border-radius:6px;font-size:13px;color:#374151;">
+        ${info.map((note) => `<div style="margin-bottom:2px;">${linkify(escapeHtml(note))}</div>`).join("")}
       </div>`
     : "";
 
@@ -119,7 +131,7 @@ function renderHtml(digest) {
       <p style="margin:0;color:#6b7280;font-size:13px;">
         ${jobs.length} new role${jobs.length === 1 ? "" : "s"} since the last email · posted in the last ${config.freshHours}h
       </p>
-      ${noticesHtml}${sections}
+      ${noticesHtml}${infoHtml}${sections}
       <p style="margin-top:28px;font-size:12px;color:#9ca3af;">${escapeHtml(footer(digest))}</p>
     </div>`;
 }

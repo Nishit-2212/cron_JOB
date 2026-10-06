@@ -1,12 +1,16 @@
-const ROLE_WORDS = ["developer", "engineer", "programmer", "sde", "dev"];
+const ROLE_WORDS = ["developer", "engineer", "programmer", "sde", "dev", "intern"];
 const REMOTE_PATTERN = /\b(remote|work from home|wfh|anywhere|distributed|home based)\b/i;
 const OPEN_REGIONS = ["anywhere", "worldwide", "global", "apac", "asia"];
 
-// Lowercase and unify common spellings so "Node JS", "node.js" and "NodeJS" compare equal.
+// Lowercase and unify common spellings so "Node JS", "node.js" and "NodeJS" compare equal,
+// and "SDE 1" / "SWE" read as software engineer titles.
 export function normalizeText(value) {
   return String(value ?? "")
     .toLowerCase()
     .replace(/node[\s.-]*js/g, "nodejs")
+    .replace(/\bnode\b/g, "nodejs")
+    .replace(/\bsde\b/g, "software development engineer")
+    .replace(/\bswe\b/g, "software engineer")
     .replace(/spring[\s-]*boot/g, "springboot")
     .replace(/back[\s-]*end/g, "backend")
     .replace(/front[\s-]*end/g, "frontend")
@@ -43,6 +47,14 @@ export function createTitleMatcher(keywords, excludeKeywords = []) {
     return patterns.some(({ required, needsRole }) =>
       required.every((word) => words.has(word)) && (!needsRole || hasRole));
   };
+}
+
+// Words that make a fresher-drive title a tech role: "Intern IT", "SDE Intern", "TCS NQT", "QA Engineer".
+const TECH_WORDS = ["software", "developer", "engineer", "engineering", "programmer", "it", "java", "springboot", "backend", "frontend", "fullstack", "nodejs", "python", "javascript", "react", "web", "cloud", "devops", "qa", "testing", "tester", "automation", "technology", "nqt"];
+
+export function isTechRole(title) {
+  const words = tokens(title);
+  return TECH_WORDS.some((word) => words.has(word));
 }
 
 export function mentionsRemote(...values) {

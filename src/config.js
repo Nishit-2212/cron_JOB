@@ -61,6 +61,8 @@ export const config = {
   providers: {
     serpApiKey: env.SERPAPI_API_KEY,
     serpApiKeywords: readList("SERPAPI_KEYWORDS", keywords),
+    // 0 = automatic: the monthly quota / 31, so a daily run never runs out before the plan renews.
+    serpApiDailySearches: readInt("SERPAPI_DAILY_SEARCHES", 0),
     adzunaAppId: env.ADZUNA_APP_ID,
     adzunaAppKey: env.ADZUNA_APP_KEY,
     joobleApiKey: env.JOOBLE_API_KEY

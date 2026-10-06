@@ -29,17 +29,29 @@ export async function fetchJson(url, { retries = 2, timeoutMs = 20_000, as = "js
       return as === "json" ? response.json() : response.text();
     }
 
-    await response.body?.cancel();
-    const retryable = response.status === 429 || response.status >= 500;
+    const detail = await errorDetail(response);
+    // An exhausted monthly quota comes back as 429 too, and retrying it only wastes time.
+    const retryable = (response.status === 429 || response.status >= 500) && !/run out of searches/i.test(detail);
     if (retryable && attempt < retries) {
       const retryAfter = Number.parseInt(response.headers.get("retry-after") || "", 10);
       await sleep(Number.isNaN(retryAfter) ? backoff(attempt) : Math.min(retryAfter, 60) * 1000);
       continue;
     }
-    throw new Error(`${response.status} ${response.statusText} (${host})`);
+    throw new Error(`${response.status} ${response.statusText}${detail ? `: ${detail}` : ""} (${host})`);
   }
 }
 
 function backoff(attempt) {
   return 1000 * 2 ** attempt + Math.random() * 500;
+}
+
+// The API's own error message, e.g. SerpApi's "Your account has run out of searches."
+async function errorDetail(response) {
+  try {
+    const data = JSON.parse(await response.text());
+    const message = data.error ?? data.message ?? data.display;
+    return typeof message === "string" ? message.trim().slice(0, 200) : "";
+  } catch {
+    return "";
+  }
 }

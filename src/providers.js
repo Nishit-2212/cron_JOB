@@ -1,21 +1,25 @@
 import { config, drivesTarget } from "./config.js";
 import { fetchJson, fetchText, sleep } from "./http.js";
-import { findCity, formatSalary, isOpenToCountry, mentionsRemote, parseDate, parseRelativeDate, stripHtml } from "./matching.js";
+import { findCity, formatSalary, isOpenToCountry, isTechRole, mentionsRemote, parseDate, parseRelativeDate, stripHtml } from "./matching.js";
 
 /**
- * Each provider returns { name, intervalMs, searches: [{ target, run }] } or null when not configured.
+ * Each provider returns { name, intervalMs, searches: [{ target, run }], summary?, note? } or null
+ * when not configured. `summary` is shown next to the source in the footer, `note` at the top.
  * `target` is the configured location the search is for; `run()` resolves to normalized jobs:
  * { title, company, location, url, source, postedAt, salary, description (full text), summary?,
- *   levels? (seniority labels from the job board), region? (extra location text), remoteEligible? }
+ *   levels? (seniority labels from the job board), region? (extra location text), remoteEligible?,
+ *   maxAgeHours? (overrides FRESH_HOURS) }
  * Searches of one provider run one after another (intervalMs apart) to respect rate limits.
  */
-export function getProviders() {
-  return [adzuna(), jooble(), serpApi(), himalayas(), jobicy(), offCampusJobs4u()].filter(Boolean);
+export async function getProviders() {
+  const providers = await Promise.all([adzuna(), jooble(), serpApi(), himalayas(), jobicy(), offCampusJobs4u()]);
+  return providers.filter(Boolean);
 }
 
-export function hasCityProvider() {
-  const { adzunaAppId, adzunaAppKey, joobleApiKey, serpApiKey } = config.providers;
-  return Boolean((adzunaAppId && adzunaAppKey) || joobleApiKey || serpApiKey);
+// Adzuna and Jooble can search every city every day; SerpApi's free plan can't (250 searches a month).
+export function hasDailyCityProvider() {
+  const { adzunaAppId, adzunaAppKey, joobleApiKey } = config.providers;
+  return Boolean((adzunaAppId && adzunaAppKey) || joobleApiKey);
 }
 
 const freshDays = () => Math.max(1, Math.ceil(config.freshHours / 24));
@@ -115,16 +119,42 @@ function jooble() {
 }
 
 // Google Jobs (includes LinkedIn/Naukri/Indeed postings). One search = one SerpApi credit.
-function serpApi() {
-  const { serpApiKey, serpApiKeywords } = config.providers;
-  if (!serpApiKey) {
+// The free plan has 250 searches a month, so each run spends only a daily share and rotates
+// through the keyword x location pairs: every pair is searched once every few days.
+async function serpApi() {
+  const { serpApiKey, serpApiKeywords, serpApiDailySearches } = config.providers;
+  const pairs = keywordTargets(serpApiKeywords);
+  if (!serpApiKey || !pairs.length) {
     return null;
   }
 
+  const name = "Google Jobs";
+  const account = await serpApiAccount(serpApiKey);
+  const perDay = serpApiDailySearches || Math.max(1, Math.floor((account?.searches_per_month ?? 250) / 31));
+  const budget = Math.min(perDay, pairs.length, account?.total_searches_left ?? Infinity);
+
+  if (budget <= 0) {
+    return {
+      name,
+      intervalMs: 0,
+      searches: [],
+      summary: "skipped, quota used up",
+      note: `${name} skipped: all ${account.searches_per_month} SerpApi searches for this month are used up. It starts again by itself when your SerpApi plan renews.`
+    };
+  }
+
+  // Each day picks up where the previous day stopped.
+  const start = (Math.floor(Date.now() / 86_400_000) * budget) % pairs.length;
+  const today = Array.from({ length: budget }, (_, index) => pairs[(start + index) % pairs.length]);
+  // A pair comes round again after `cycleDays`, so keep jobs posted since its previous search.
+  const cycleDays = Math.ceil(pairs.length / budget);
+  const maxAgeHours = Math.max(config.freshHours, cycleDays * 24);
+
   return {
-    name: "Google Jobs",
+    name,
     intervalMs: 1000,
-    searches: keywordTargets(serpApiKeywords).map(({ keyword, target }) => ({
+    summary: budget < pairs.length ? `${budget} of ${pairs.length} searches today, each repeats every ${cycleDays} days` : "",
+    searches: today.map(({ keyword, target }) => ({
       target,
       run: async () => {
         const url = new URL("https://serpapi.com/search.json");
@@ -155,12 +185,22 @@ function serpApi() {
             postedAt: parseRelativeDate(extensions.posted_at),
             salary: extensions.salary || "",
             description: stripHtml(job.description),
-            remoteEligible: target.remote ? true : undefined
+            remoteEligible: target.remote ? true : undefined,
+            maxAgeHours
           };
         });
       }
     }))
   };
+}
+
+// Free, and not counted against the quota: https://serpapi.com/account-api
+async function serpApiAccount(apiKey) {
+  try {
+    return await fetchJson(`https://serpapi.com/account.json?api_key=${encodeURIComponent(apiKey)}`, { retries: 1 });
+  } catch {
+    return null; // The searches themselves will report a bad key.
+  }
 }
 
 // Remote jobs, no key needed: https://himalayas.app/api
@@ -235,7 +275,7 @@ const OFFCAMPUS_MAX_PAGES = 5;
 
 // Fresher off-campus drives posted on offcampusjobs4u.com, read from its public RSS feed.
 // The feed holds 10 posts (about a day's worth), so older pages are read until the posts
-// fall outside FRESH_HOURS. Only IT/Software posts are kept.
+// fall outside FRESH_HOURS. Only IT/Software posts with a tech role in the title are kept.
 function offCampusJobs4u() {
   if (!drivesTarget) {
     return null;
@@ -274,6 +314,8 @@ function offCampusJobs4u() {
 
         return items
           .filter((item) => item.categories.some((category) => /it\/software|software engineer|developer/i.test(category)))
+          // The site's tags are loose: "Transportation Specialist" or "Executive Assistant" posts get tagged IT/Software too.
+          .filter((item) => isTechRole(item.title))
           .map((item) => {
             const { company, role, location, salary } = parseDriveTitle(item.title);
             return {
@@ -311,9 +353,10 @@ function parseRssItems(xml) {
 
 // "Cisco Recruitment 2026 – Software Engineer | Bangalore | C/C++ & Python"
 //   -> { company: "Cisco", role: "Software Engineer", location: "Bangalore", salary: "" }
+// Some posts use a colon instead: "Microsoft Internship 2026: Software Engineering Intern | Across India"
 function parseDriveTitle(title) {
   const [head, ...segments] = title.split("|").map((part) => part.trim());
-  const [lead, ...roleParts] = head.split(/\s+[–—-]\s+/);
+  const [lead, ...roleParts] = head.split(/\s+[–—-]\s+|:\s+/);
   const company = lead.split(/\s+(?:off\s*campus|recruitment|hiring|careers?|walk-?in|internship|jobs?)\b/i)[0].trim() || lead;
   const salary = segments.find((part) => /lpa|₹|ctc|stipend/i.test(part)) || "";
   const city = findCity(title, config.locations.filter((location) => !location.remote));
